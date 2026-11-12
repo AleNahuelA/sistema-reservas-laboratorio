@@ -1,11 +1,12 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from contextlib import closing
+import json
+from pathlib import Path
+import sqlite3
 from typing import Callable
 
 
-UNIDADES_INICIALES = frozenset(
-    {"MIC-01", "MIC-02", "OSC-01", "MUL-01", "FUE-01"}
-)
 FORMATO_FECHA = "%Y-%m-%dT%H:%M"
 
 
@@ -17,6 +18,7 @@ class Reserva:
     inicio: datetime
     fin: datetime
     estado: str = "activa"
+    fecha_cancelacion: datetime | None = None
 
 
 class _ReservaSuperpuestaError(ValueError):
@@ -24,10 +26,28 @@ class _ReservaSuperpuestaError(ValueError):
 
 
 class GestorReservas:
-    def __init__(self, reloj: Callable[[], datetime] = datetime.now):
-        self._reservas = []
+    def __init__(
+        self,
+        reloj: Callable[[], datetime] = datetime.now,
+        db_path=None,
+        inventory_path=None,
+    ):
+        directorio_datos = Path(__file__).resolve().parents[2] / "data"
+        self._db_path = (
+            Path(db_path)
+            if db_path is not None
+            else directorio_datos / "reservas.db"
+        )
+        ruta_inventario = (
+            Path(inventory_path)
+            if inventory_path is not None
+            else directorio_datos / "inventario.json"
+        )
+        self._inventario = self._cargar_inventario(ruta_inventario)
+        self._unidades = frozenset(self._inventario)
         self._reloj = reloj
-        self._siguiente_id = 1
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._reservas = self._cargar_reservas()
 
     @property
     def reservas(self):
@@ -37,12 +57,30 @@ class GestorReservas:
         if not isinstance(solicitante, str) or not solicitante.strip():
             raise ValueError("El solicitante no puede estar vacío.")
         inicio_dt, fin_dt = self._validar_reserva(unidad, inicio, fin)
-        reserva = Reserva(
-            self._siguiente_id, unidad, solicitante, inicio_dt, fin_dt
-        )
+        with closing(sqlite3.connect(self._db_path)) as conexion:
+            with conexion:
+                cursor = conexion.execute(
+                    """
+                    INSERT INTO reservas (unidad, solicitante, inicio, fin, estado)
+                    VALUES (?, ?, ?, ?, 'activa')
+                    """,
+                    (
+                        unidad,
+                        solicitante,
+                        inicio_dt.isoformat(timespec="minutes"),
+                        fin_dt.isoformat(timespec="minutes"),
+                    ),
+                )
+                id_reserva = cursor.lastrowid
+        reserva = Reserva(id_reserva, unidad, solicitante, inicio_dt, fin_dt)
         self._reservas.append(reserva)
-        self._siguiente_id += 1
         return reserva
+
+    def reiniciar_datos(self):
+        with closing(sqlite3.connect(self._db_path)) as conexion:
+            with conexion:
+                conexion.execute("DELETE FROM reservas")
+        self._reservas.clear()
 
     def buscar_por_id(self, id_reserva):
         for reserva in self._reservas:
@@ -58,7 +96,7 @@ class GestorReservas:
         return True
 
     def _validar_reserva(self, unidad, inicio, fin):
-        if not isinstance(unidad, str) or unidad not in UNIDADES_INICIALES:
+        if not isinstance(unidad, str) or unidad not in self._unidades:
             raise ValueError(f"Unidad desconocida: {unidad!r}.")
 
         if not isinstance(inicio, str) or not isinstance(fin, str):
@@ -99,3 +137,65 @@ class GestorReservas:
                     "La reserva se superpone con otra reserva activa de la unidad."
                 )
         return inicio_dt, fin_dt
+
+    @staticmethod
+    def _cargar_inventario(ruta_inventario):
+        with ruta_inventario.open(encoding="utf-8") as archivo:
+            inventario = json.load(archivo)
+        if not isinstance(inventario, dict) or not all(
+            isinstance(unidad, str)
+            and unidad
+            and isinstance(equipo, str)
+            and equipo
+            for unidad, equipo in inventario.items()
+        ):
+            raise ValueError("El inventario debe asociar cada unidad con su equipo.")
+        return inventario
+
+    def _cargar_reservas(self):
+        with closing(sqlite3.connect(self._db_path)) as conexion:
+            with conexion:
+                conexion.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS reservas (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        unidad TEXT NOT NULL,
+                        solicitante TEXT NOT NULL,
+                        inicio TEXT NOT NULL,
+                        fin TEXT NOT NULL,
+                        estado TEXT NOT NULL,
+                        fecha_cancelacion TEXT
+                    )
+                    """
+                )
+                filas = conexion.execute(
+                    """
+                    SELECT id, unidad, solicitante, inicio, fin, estado, fecha_cancelacion
+                    FROM reservas
+                    ORDER BY id
+                    """
+                ).fetchall()
+        return [
+            Reserva(
+                id=id_reserva,
+                unidad=unidad,
+                solicitante=solicitante,
+                inicio=datetime.fromisoformat(inicio),
+                fin=datetime.fromisoformat(fin),
+                estado=estado,
+                fecha_cancelacion=(
+                    datetime.fromisoformat(fecha_cancelacion)
+                    if fecha_cancelacion is not None
+                    else None
+                ),
+            )
+            for (
+                id_reserva,
+                unidad,
+                solicitante,
+                inicio,
+                fin,
+                estado,
+                fecha_cancelacion,
+            ) in filas
+        ]

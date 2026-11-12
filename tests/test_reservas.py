@@ -1,3 +1,7 @@
+from contextlib import closing
+import json
+import sqlite3
+import tempfile
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -11,7 +15,14 @@ from reservas.domain import GestorReservas
 class GestorReservasTests(unittest.TestCase):
     def setUp(self):
         self.ahora = datetime(2035, 5, 20, 12, 0)
-        self.gestor = GestorReservas(reloj=lambda: self.ahora)
+        self.directorio_temporal = tempfile.TemporaryDirectory()
+        self.gestor = GestorReservas(
+            reloj=lambda: self.ahora,
+            db_path=Path(self.directorio_temporal.name) / "reservas.db",
+        )
+
+    def tearDown(self):
+        self.directorio_temporal.cleanup()
 
     def intervalo_futuro(self, dias=1, duracion_horas=1):
         inicio = self.ahora + timedelta(days=dias)
@@ -132,6 +143,103 @@ class GestorReservasTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             self.gestor.consultar_disponibilidad("NO-EXISTE", inicio, fin)
+
+    def test_inventario_se_carga_desde_archivo(self):
+        inicio, fin = self.intervalo_futuro()
+        with tempfile.TemporaryDirectory() as directorio:
+            ruta_db = Path(directorio) / "reservas.db"
+            ruta_inventario = Path(directorio) / "inventario.json"
+            ruta_inventario.write_text(
+                json.dumps({"EQ-01": "Equipo de prueba"}),
+                encoding="utf-8",
+            )
+            gestor = GestorReservas(
+                reloj=lambda: self.ahora,
+                db_path=ruta_db,
+                inventory_path=ruta_inventario,
+            )
+
+            reserva = gestor.reservar("EQ-01", "Solicitante ficticio", inicio, fin)
+
+            self.assertEqual(reserva.unidad, "EQ-01")
+            with self.assertRaisesRegex(ValueError, "Unidad desconocida"):
+                gestor.reservar("MIC-01", "Solicitante ficticio", inicio, fin)
+
+    def test_reservas_activas_y_canceladas_se_recuperan_al_reiniciar(self):
+        inicio_activa, fin_activa = self.intervalo_futuro()
+        inicio_cancelada, fin_cancelada = self.intervalo_futuro(dias=2)
+        fecha_cancelacion = "2035-05-20T12:30:00"
+        with tempfile.TemporaryDirectory() as directorio:
+            ruta_db = Path(directorio) / "reservas.db"
+            gestor = GestorReservas(reloj=lambda: self.ahora, db_path=ruta_db)
+            activa = gestor.reservar(
+                "MIC-01", "Solicitante ficticio", inicio_activa, fin_activa
+            )
+            cancelada = gestor.reservar(
+                "MIC-02", "Otro solicitante ficticio", inicio_cancelada, fin_cancelada
+            )
+            with closing(sqlite3.connect(ruta_db)) as conexion:
+                with conexion:
+                    conexion.execute(
+                        "UPDATE reservas SET estado = ?, fecha_cancelacion = ? WHERE id = ?",
+                        ("cancelada", fecha_cancelacion, cancelada.id),
+                    )
+
+            gestor_reiniciado = GestorReservas(
+                reloj=lambda: self.ahora, db_path=ruta_db
+            )
+
+            self.assertEqual(gestor_reiniciado.buscar_por_id(activa.id), activa)
+            self.assertFalse(
+                gestor_reiniciado.consultar_disponibilidad(
+                    "MIC-01", inicio_activa, fin_activa
+                )
+            )
+            reserva_cancelada = gestor_reiniciado.buscar_por_id(cancelada.id)
+            self.assertEqual(reserva_cancelada.estado, "cancelada")
+            self.assertEqual(
+                reserva_cancelada.fecha_cancelacion,
+                datetime.fromisoformat(fecha_cancelacion),
+            )
+            self.assertTrue(
+                gestor_reiniciado.consultar_disponibilidad(
+                    "MIC-02", inicio_cancelada, fin_cancelada
+                )
+            )
+            siguiente_inicio, siguiente_fin = self.intervalo_futuro(dias=3)
+            siguiente = gestor_reiniciado.reservar(
+                "MIC-01", "Tercer solicitante ficticio", siguiente_inicio, siguiente_fin
+            )
+            self.assertGreater(siguiente.id, cancelada.id)
+
+    def test_validacion_fallida_no_persiste_reserva(self):
+        inicio, fin = self.intervalo_futuro()
+        with tempfile.TemporaryDirectory() as directorio:
+            ruta_db = Path(directorio) / "reservas.db"
+            gestor = GestorReservas(reloj=lambda: self.ahora, db_path=ruta_db)
+
+            with self.assertRaisesRegex(ValueError, "Unidad desconocida"):
+                gestor.reservar("NO-EXISTE", "Solicitante ficticio", inicio, fin)
+
+            with closing(sqlite3.connect(ruta_db)) as conexion:
+                cantidad = conexion.execute(
+                    "SELECT COUNT(*) FROM reservas"
+                ).fetchone()[0]
+            self.assertEqual(cantidad, 0)
+
+    def test_reiniciar_datos_borra_reservas_y_conserva_inventario(self):
+        inicio, fin = self.intervalo_futuro()
+        reserva = self.gestor.reservar(
+            "MIC-01", "Solicitante ficticio", inicio, fin
+        )
+
+        self.gestor.reiniciar_datos()
+
+        self.assertEqual(self.gestor.reservas, ())
+        nueva = self.gestor.reservar(
+            "MIC-02", "Otro solicitante ficticio", inicio, fin
+        )
+        self.assertGreater(nueva.id, reserva.id)
 
 
 if __name__ == "__main__":

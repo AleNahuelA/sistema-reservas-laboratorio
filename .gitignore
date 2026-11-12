@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+data/reservas.db
+data/*.db-journal

@@ -1,13 +1,12 @@
 # Progreso y decisiones
 
 ## Entorno
-- VS Code: versión ___
-- Extensión GitHub Copilot: versión ___ (modo Agent)
-- Modelo: ___ (si no se muestra, escribir "no visible")
-- Python: salida de `python --version`: ___
+- VS Code
+- Extensión GitHub Copilot   
+- Python: salida de `python --version`: 3.14
 - Plan: Copilot Free
 
-## Registro
+## Registro         
 (el agente agrega entradas acá; yo agrego las decisiones de revisión)
 
 ### 2026-11-10 — Núcleo de reglas de reservas en memoria
@@ -22,3 +21,38 @@
 - **Prueba primero:** antes de cambiar la implementación, `python -m unittest discover -s tests -v` ejecutó 8 pruebas y falló con 8 errores: `GestorReservas.__init__()` no aceptaba `reloj`.
 - **Comando y resultado final:** `python -m unittest discover -s tests -v` — **OK**, 8 pruebas ejecutadas. Se antepuso temporalmente al `PATH` el intérprete Python 3.14 disponible mediante `py`, porque `python` no está disponible directamente en el entorno.
 - **Validación adicional:** `git diff --check` sin errores; diagnóstico Pylance de `domain.py` sin diagnósticos. La comprobación de compatibilidad de firma de Pylance no encontró call sites resolubles.
+
+- **Verificado por mí (Windows, Python 3.14.6 según `py --version`):**
+  `py -m unittest discover -s tests -v` → 8 pruebas OK en mi terminal.
+- **Solo informado por el agente (no verificado por mí):** `git diff --check`
+  y diagnósticos de Pylance.
+- **Aprobaciones de comandos que di:** pruebas con `Allow Once`; diagnóstico de
+  lectura de Python (`Get-Command`, variables de entorno) con `Allow Once`;
+  `py -m unittest ...` con `Allow Once`. No usé "permitir siempre".
+- **Decisión humana:** CORREGIR. Al revisar el diff pedí tres cambios:
+  (a) la consulta de disponibilidad no debe exigir solicitante, porque el enunciado
+  habla de consultar por unidad e intervalo; (b) la reserva necesita ID, porque
+  debe ser identificable y la cancelación conserva el identificador; (c) reloj
+  inyectable, para que las pruebas no dependan de la fecha del día.
+  Tras la corrección acepté el resultado.
+- **Evidencia:** commit `<hash>`.
+
+### 2026-11-11 — Persistencia SQLite e inventario externo
+- **Tarea:** se agregó persistencia de reservas y estados en `data/reservas.db`,
+  carga del inventario desde `data/inventario.json`, reinicio de reservas sin
+  borrar el inventario, y pruebas temporales para persistencia, IDs, carga de
+  inventario y fallos de validación.
+- **Decisiones:** el JSON asocia cada ID de unidad con su nombre de equipo;
+  SQLite usa `INTEGER PRIMARY KEY AUTOINCREMENT` para no reutilizar IDs, incluso
+  luego de reiniciar datos. La fecha de cancelación es nullable y se carga junto
+  con el estado. La prueba marca una reserva como cancelada directamente en
+  SQLite, sin agregar aún la cancelación de usuario.
+- **Prueba primero:** antes de implementar, `py -m unittest discover -s tests -v`
+  ejecutó 12 pruebas y falló con 12 errores porque `GestorReservas` todavía no
+  aceptaba `db_path`.
+- **Comando y resultado final:** `py -m unittest discover -s tests -v` —
+  **OK**, 12 pruebas ejecutadas.
+- **Validación adicional:** `git diff --check` señaló espacios finales en líneas
+  preexistentes y modificadas localmente de esta bitácora; no se alteraron esos
+  cambios del usuario. La prueba modificó temporalmente los `.pyc` versionados;
+  fueron restaurados y no quedan modificados. Sin commit.
