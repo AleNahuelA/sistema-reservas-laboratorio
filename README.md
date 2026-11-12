@@ -36,3 +36,23 @@ anticipación máxima 90 días; cancelar una reserva ya cancelada da error.
 - CA4. Tras detener y reiniciar la app, las reservas activas y canceladas siguen ahí.
 - CA5. Entradas inválidas (unidad desconocida, solicitante vacío, fecha mal formada,
        inicio >= fin) se rechazan con mensaje claro.
+
+## 2. Interfaz de consola
+
+Desde la raíz del repositorio, ejecutar con Python 3:
+
+```powershell
+py -m src.reservas --help
+py -m src.reservas disponibilidad MIC-01 "<inicio>" "<fin>"
+py -m src.reservas reservar MIC-01 "Solicitante ficticio" "<inicio>" "<fin>"
+py -m src.reservas cancelar 1
+py -m src.reservas listar
+py -m src.reservas reiniciar-datos
+```
+
+Reemplazá `<inicio>` y `<fin>` por fechas futuras válidas en formato
+`YYYY-MM-DDTHH:MM` (máximo 90 días de anticipación y hasta 8 horas de duración).
+La base predeterminada es
+`data/reservas.db`; se puede cambiar con `--db <ruta>` antes del subcomando o
+con la variable de entorno `RESERVAS_DB`. `reiniciar-datos` solicita escribir
+`SI` antes de borrar las reservas.

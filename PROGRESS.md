@@ -56,3 +56,23 @@
   preexistentes y modificadas localmente de esta bitácora; no se alteraron esos
   cambios del usuario. La prueba modificó temporalmente los `.pyc` versionados;
   fueron restaurados y no quedan modificados. Sin commit.
+
+### 2026-11-12 — Cancelación y CLI
+- **Tarea:** se agregó cancelación persistente por ID, con fecha de cancelación,
+  conservación del registro y liberación del intervalo; se agregó la CLI con
+  disponibilidad, reserva, cancelación, listado y reinicio confirmado. Se
+  documentó su uso en README y se añadieron pruebas de dominio y CLI.
+- **Decisiones:** la cancelación actualiza SQLite dentro de una transacción y
+  luego actualiza el estado en memoria; IDs inexistentes producen `KeyError` y
+  las dobles cancelaciones `ValueError`. La CLI acepta `--db` antes del
+  subcomando o `RESERVAS_DB`; `reiniciar-datos` exige escribir `SI` exactamente
+  y no borra con confirmación negativa o entrada finalizada. El comando
+  documentado para el diseño `src/` es `py -m src.reservas`.
+- **Prueba primero:** antes de implementar, `py -m unittest discover -s tests -v`
+  ejecutó 18 pruebas y falló con 6 errores: no existían `GestorReservas.cancelar`
+  ni `reservas.cli`.
+- **Comando y resultado final:** `py -m unittest discover -s tests -v` —
+  **OK**, 20 pruebas ejecutadas con Python 3.15.2.
+- **Validación adicional:** `py -m src.reservas --help` — **OK**;
+  `git diff --check` — **OK**; diagnósticos Pylance de sintaxis en los archivos
+  Python modificados — **sin errores**. Sin commit.

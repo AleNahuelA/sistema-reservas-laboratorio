@@ -241,6 +241,78 @@ class GestorReservasTests(unittest.TestCase):
         )
         self.assertGreater(nueva.id, reserva.id)
 
+    def test_cancelar_conserva_registro_y_persiste_fecha(self):
+        inicio, fin = self.intervalo_futuro()
+        reserva = self.gestor.reservar(
+            "MIC-01", "Solicitante ficticio", inicio, fin
+        )
+
+        cancelada = self.gestor.cancelar(reserva.id)
+        gestor_reiniciado = GestorReservas(
+            reloj=lambda: self.ahora,
+            db_path=Path(self.directorio_temporal.name) / "reservas.db",
+        )
+
+        self.assertEqual(cancelada.id, reserva.id)
+        self.assertEqual(cancelada.unidad, reserva.unidad)
+        self.assertEqual(cancelada.solicitante, reserva.solicitante)
+        self.assertEqual(cancelada.inicio, reserva.inicio)
+        self.assertEqual(cancelada.fin, reserva.fin)
+        self.assertEqual(cancelada.estado, "cancelada")
+        self.assertEqual(cancelada.fecha_cancelacion, self.ahora)
+        self.assertEqual(gestor_reiniciado.buscar_por_id(reserva.id), cancelada)
+
+    def test_cancelar_libera_intervalo_para_otra_reserva(self):
+        inicio, fin = self.intervalo_futuro()
+        reserva = self.gestor.reservar(
+            "MIC-01", "Solicitante ficticio", inicio, fin
+        )
+        self.gestor.cancelar(reserva.id)
+
+        self.assertTrue(self.gestor.consultar_disponibilidad("MIC-01", inicio, fin))
+        nueva = self.gestor.reservar(
+            "MIC-01", "Otro solicitante ficticio", inicio, fin
+        )
+        self.assertNotEqual(nueva.id, reserva.id)
+
+    def test_cancelar_no_desbloquea_otra_reserva_activa(self):
+        inicio, fin = self.intervalo_futuro()
+        segundo_inicio = fin
+        segundo_fin = (
+            datetime.strptime(fin, "%Y-%m-%dT%H:%M") + timedelta(hours=1)
+        ).strftime("%Y-%m-%dT%H:%M")
+        primera = self.gestor.reservar(
+            "MIC-01", "Solicitante ficticio", inicio, fin
+        )
+        segunda = self.gestor.reservar(
+            "MIC-01", "Otro solicitante ficticio", segundo_inicio, segundo_fin
+        )
+
+        self.gestor.cancelar(primera.id)
+
+        self.assertFalse(
+            self.gestor.consultar_disponibilidad("MIC-01", segundo_inicio, segundo_fin)
+        )
+        with self.assertRaisesRegex(ValueError, "superpone"):
+            self.gestor.reservar(
+                "MIC-01", "Tercer solicitante ficticio", segundo_inicio, segundo_fin
+            )
+        self.assertEqual(self.gestor.buscar_por_id(segunda.id).estado, "activa")
+
+    def test_cancelar_reserva_dos_veces_da_error(self):
+        inicio, fin = self.intervalo_futuro()
+        reserva = self.gestor.reservar(
+            "MIC-01", "Solicitante ficticio", inicio, fin
+        )
+        self.gestor.cancelar(reserva.id)
+
+        with self.assertRaisesRegex(ValueError, "ya está cancelada"):
+            self.gestor.cancelar(reserva.id)
+
+    def test_cancelar_id_inexistente_da_error(self):
+        with self.assertRaisesRegex(KeyError, "No existe una reserva con id 999"):
+            self.gestor.cancelar(999)
+
 
 if __name__ == "__main__":
     unittest.main()

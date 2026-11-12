@@ -82,6 +82,49 @@ class GestorReservas:
                 conexion.execute("DELETE FROM reservas")
         self._reservas.clear()
 
+    def cancelar(self, id_reserva):
+        reserva = self.buscar_por_id(id_reserva)
+        if reserva.estado != "activa":
+            raise ValueError(f"La reserva {id_reserva} ya está cancelada.")
+
+        fecha_cancelacion = self._reloj().replace(microsecond=0)
+        with closing(sqlite3.connect(self._db_path)) as conexion:
+            with conexion:
+                fila = conexion.execute(
+                    "SELECT estado FROM reservas WHERE id = ?", (id_reserva,)
+                ).fetchone()
+                if fila is None:
+                    raise KeyError(f"No existe una reserva con id {id_reserva}.")
+                if fila[0] != "activa":
+                    raise ValueError(f"La reserva {id_reserva} ya está cancelada.")
+                cursor = conexion.execute(
+                    """
+                    UPDATE reservas
+                    SET estado = 'cancelada', fecha_cancelacion = ?
+                    WHERE id = ? AND estado = 'activa'
+                    """,
+                    (
+                        fecha_cancelacion.isoformat(timespec="seconds"),
+                        id_reserva,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise ValueError(
+                        f"No se pudo cancelar la reserva {id_reserva} porque cambió su estado."
+                    )
+
+        cancelada = Reserva(
+            id=reserva.id,
+            unidad=reserva.unidad,
+            solicitante=reserva.solicitante,
+            inicio=reserva.inicio,
+            fin=reserva.fin,
+            estado="cancelada",
+            fecha_cancelacion=fecha_cancelacion,
+        )
+        self._reservas[self._reservas.index(reserva)] = cancelada
+        return cancelada
+
     def buscar_por_id(self, id_reserva):
         for reserva in self._reservas:
             if reserva.id == id_reserva:
